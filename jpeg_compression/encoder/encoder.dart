@@ -8,12 +8,21 @@ class Encoder {
   encode() async {
     List<List<List<int>>> blocks =
         await SoundFile(filePath: filePath).getListOfBlocks();
+    print("blocks is ${blocks.length*64}");
     List<List<List<int>>> shiftedBlocks = _shiftLeft(blocks);
     List<List<List<int>>> dctCoefficients = _dctCoefficients(shiftedBlocks);
     List<List<int>> quantizationMatrix = _getQuantizationMatrix();
     List<List<List<int>>> quantizedDCTCoefficients =
         _quantizeDCTCoefficients(dctCoefficients, quantizationMatrix);
-
+    // AC coefficients are run length encoded
+    List<List<int>> zigzagOrder = _zigzagOrder(quantizedDCTCoefficients);
+    print("zigzagOrder is ${zigzagOrder[0]}");
+    print("zigzagOrder size is ${zigzagOrder[0].length}");
+    List<int> runLengthEncodedCoefficients = _runLengthEncoding(zigzagOrder);
+    print("finished RunLength coded");
+    // DC coefficients are encoded using differential pulse code modulation
+    List<int> DPCMEncodedCoefficients = _DPCMEncoding(quantizedDCTCoefficients);
+    Map<int,int> huffmanTable =  _getHuffmanTable(runLengthEncodedCoefficients,DPCMEncodedCoefficients);
   }
 
   // subtract 2^(n-1) from each element in the block in this case 128
@@ -39,6 +48,7 @@ class Encoder {
     for (int i = 0; i < blocks.length; i++) {
       dctCoefficients.add(_blockDCTCoefficientCalculation(blocks[i]));
     }
+    return blocks;
   }
 
   _blockDCTCoefficientCalculation(List<List<int>> block) {
@@ -51,7 +61,7 @@ class Encoder {
           for (int y = 0; y < block[0].length; y++) {
             coefficientValue += (block[x][y] *
                 cos(((2 * x + 1) * rowIndex * pi) / 16) *
-                cos(((2 * y + 1) * colIndex * pi) / 16)) as int;
+                cos(((2 * y + 1) * colIndex * pi) / 16));
           }
         }
         coefficientValue = coefficientValue / 4;
@@ -67,26 +77,27 @@ class Encoder {
   }
 
   List<List<int>> _getQuantizationMatrix() {
-    List<List<int>>quantizationMatrix=List.filled(8, List.filled(8, 0));
-    int quality=15;
-    for(int i=0;i<8;i++)
-      {
-        for(int f=0;f<8;f++)
-          {
-            quantizationMatrix[i][f]=((1+(1+i+f)*quality));
-          }
+    List<List<int>> quantizationMatrix = List.filled(8, List.filled(8, 0));
+    int quality = 15;
+    for (int i = 0; i < 8; i++) {
+      for (int f = 0; f < 8; f++) {
+        quantizationMatrix[i][f] = ((1 + (1 + i + f) * quality));
       }
+    }
     return quantizationMatrix;
   }
 
-  List<List<List<int>>> _quantizeDCTCoefficients(List<List<List<int>>> dctCoefficients, List<List<int>> quantizationMatrix) {
+  List<List<List<int>>> _quantizeDCTCoefficients(
+      List<List<List<int>>> dctCoefficients,
+      List<List<int>> quantizationMatrix) {
     List<List<List<int>>> quantizedDCTCoefficientsBlocks = [];
     for (int i = 0; i < dctCoefficients.length; i++) {
       List<List<int>> quantizedDCTCoefficientBlock = [];
       for (int j = 0; j < dctCoefficients[i].length; j++) {
         List<int> quantizedDCTRow = [];
         for (int k = 0; k < dctCoefficients[i][j].length; k++) {
-          quantizedDCTRow.add((dctCoefficients[i][j][k] / quantizationMatrix[j][k]).round());
+          quantizedDCTRow.add(
+              (dctCoefficients[i][j][k] / quantizationMatrix[j][k]).round());
         }
         quantizedDCTCoefficientBlock.add(quantizedDCTRow);
       }
@@ -95,8 +106,122 @@ class Encoder {
     return quantizedDCTCoefficientsBlocks;
   }
 
+  List<int> _runLengthEncoding(List<List<int>> blocksZigZagOrder) {
+    List<int> runLengthEncodedCoefficients = [];
+    for (int blockIndex = 0;
+        blockIndex < blocksZigZagOrder.length;
+        blockIndex++) {
+      List<int> zigzagOrder = blocksZigZagOrder[blockIndex];
+      _runLengthEncodingBlock(zigzagOrder, runLengthEncodedCoefficients);
+    }
+    return runLengthEncodedCoefficients;
+  }
 
+  List<List<int>> _zigzagOrder(List<List<List<int>>> quantizedDCTCoefficient) {
+    int numRows = quantizedDCTCoefficient[0].length;
+    int numCols = quantizedDCTCoefficient[0][0].length;
+    List<List<int>> result = [];
+    for (int blockIndex = 0;
+        blockIndex < quantizedDCTCoefficient.length;
+        blockIndex++) {
+      List<int> zigzagOrder = [];
+      for (int sum = 1; sum <= numRows + numCols - 2; sum++) {
+        if (sum % 2 == 0) {
+          // Even sum, move up
+          for (int row = sum; row >= 0; row--) {
+            int col = sum - row;
+            if (row < numRows && col < numCols) {
+              zigzagOrder.add(quantizedDCTCoefficient[blockIndex][row][col]);
+            }
+          }
+        } else {
+          // Odd sum, move down
+          for (int col = sum; col >= 0; col--) {
+            int row = sum - col;
+            if (row < numRows && col < numCols) {
+              zigzagOrder.add(quantizedDCTCoefficient[blockIndex][row][col]);
+            }
+          }
+        }
+      }
+      result.add(zigzagOrder);
+    }
 
+    return result;
+  }
 
+  _runLengthEncodingBlock(List<int> zigzagOrder, List<int> result) {
+    //print("entered run length encoding block");
+    int zeroCounter = 0;
+    for (int i = 0; i < zigzagOrder.length; i++) {
+      if (zigzagOrder[i] == 0) {
+        zeroCounter++;
+      } else {
+        while (zeroCounter > 15) {
+          result.add((15 << 4));
+          zeroCounter -= 16;
+        }
+        result.add((zeroCounter << 4) | _getCategory(zigzagOrder[i]));
+        zeroCounter = 0;
+      }
+    }
+    result.add(0);
+    // print("runLengthEncodedBlock is finsihed");
+  }
 
+  List<int> _DPCMEncoding(List<List<List<int>>> quantizedDCTCoefficients) {
+    List<int> DPCMEncodedCoefficients = [];
+    // DC coefficients subtracted from the previous DC coefficient
+    int previousDC = 0;
+    for (int blockIndex = 0;
+        blockIndex < quantizedDCTCoefficients.length;
+        blockIndex++) {
+      int currentDC = quantizedDCTCoefficients[blockIndex][0][0];
+      int encodedDC = currentDC - previousDC;
+      DPCMEncodedCoefficients.add(encodedDC);
+      previousDC = currentDC;
+    }
+    return DPCMEncodedCoefficients;
+  }
+
+  _getCategory(int value) {
+    int count = 0;
+    value = value.abs();
+    while (value > 0) {
+      count += value & 1;
+      value >>= 1;
+    }
+    return count;
+  }
+
+  _getHuffmanTable(List<int> runLengthEncodedCoefficients, List<int> dpcmEncodedCoefficients) {
+    print("run length coding length is ${runLengthEncodedCoefficients.length}");
+    print("dpcm coding length is ${dpcmEncodedCoefficients.length}");
+    Map<int,int> huffmanTable = {};
+    Map<int,int> statics = {};
+    for(int i = 0; i < runLengthEncodedCoefficients.length; i++) {
+      statics.putIfAbsent(runLengthEncodedCoefficients[i], () => 0);
+      statics[runLengthEncodedCoefficients[i]]= statics[runLengthEncodedCoefficients[i]]! + 1;
+    }
+    for(int i = 0; i < dpcmEncodedCoefficients.length; i++) {
+      statics.putIfAbsent(dpcmEncodedCoefficients[i], () => 0);
+      statics[dpcmEncodedCoefficients[i]]= statics[dpcmEncodedCoefficients[i]]! + 1;
+    }
+
+    _createHuffmanTable(statics, huffmanTable);
+    return huffmanTable;
+
+  }
+
+  void _createHuffmanTable(Map<int, int> statics, Map<int, int> huffmanTable) {
+    List<int> keys = statics.keys.toList();
+    keys.sort((a,b) => statics[a]!.compareTo(statics[b]!));
+    print("sorted keys $keys");
+    int code = 0;
+    for(int i = 0; i < keys.length; i++) {
+      huffmanTable[keys[i]] = code;
+      code++;
+    }
+
+  }
 }
