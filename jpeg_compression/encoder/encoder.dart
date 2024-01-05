@@ -11,37 +11,31 @@ class Encoder {
   encode() async {
     List<List<List<int>>> blocks =
         await SoundFile(filePath: filePath).getListOfBlocks();
-    print("blocks is ${blocks.length * 64}");
-    print("blocks is ${blocks.length}");
+    List<int> metaData = await SoundFile(filePath: filePath).getMetaData();
+    //shift block
     List<List<List<int>>> shiftedBlocks = _shiftLeft(blocks);
+    // DCT and quantization
     List<List<List<int>>> dctCoefficients = _dctCoefficients(shiftedBlocks);
     List<List<int>> quantizationMatrix = _getQuantizationMatrix();
     List<List<List<int>>> quantizedDCTCoefficients =
         _quantizeDCTCoefficients(dctCoefficients, quantizationMatrix);
-    // AC coefficients are run length encoded
+    // run length encoding
     List<List<int>> zigzagOrder = _zigzagOrder(quantizedDCTCoefficients);
     List<int> runLengthEncodedCoefficients = _runLengthEncoding(zigzagOrder);
-    print("run length coding length is ${runLengthEncodedCoefficients.length}");
-    print("run length coding error one length is ${runLengthEncodedCoefficients[9227194]}");
-
-    // DC coefficients are encoded using differential pulse code modulation
+    // DC Encoding Coefficients
     List<int> DPCMEncodedCoefficients = _DPCMEncoding(quantizedDCTCoefficients);
-    print("ziajag order length is ${zigzagOrder.length*zigzagOrder[0].length}");
-    print("dpcm coding length is ${DPCMEncodedCoefficients.length}");
-    print("ziagzag or der + dpcm ${zigzagOrder.length*zigzagOrder[0].length + DPCMEncodedCoefficients.length}");
+    // huffman encoding
     Map<int, String> huffmanTable =
         _getHuffmanTable(runLengthEncodedCoefficients, DPCMEncodedCoefficients);
     List<int> DPCMEncodedCoefficientsWithHuffman = [];
     _applyHuffmanEncoding(DPCMEncodedCoefficients, huffmanTable,
         DPCMEncodedCoefficientsWithHuffman);
-  print("applied on first");
     List<int> ACCoefficientsWithHuffman = [];
     _applyHuffmanEncoding(
         runLengthEncodedCoefficients, huffmanTable, ACCoefficientsWithHuffman);
 
     _writeAtFile(DPCMEncodedCoefficientsWithHuffman, ACCoefficientsWithHuffman,
-        huffmanTable, quantizationMatrix);
-    print("finished");
+        huffmanTable, quantizationMatrix,metaData,filePath);
   }
 
   // subtract 2^(n-1) from each element in the block in this case 128
@@ -88,7 +82,7 @@ class Encoder {
         if (rowIndex == 0 && colIndex == 0) {
           coefficientValue /= sqrt(2);
         }
-        dctRow.add(coefficientValue.round());
+        dctRow.add(coefficientValue.floor());
       }
       dctCoefficients.add(dctRow);
     }
@@ -97,7 +91,7 @@ class Encoder {
 
   List<List<int>> _getQuantizationMatrix() {
     List<List<int>> quantizationMatrix = List.filled(8, List.filled(8, 0));
-    int quality = 15;
+    int quality = 0;
     for (int i = 0; i < 8; i++) {
       for (int f = 0; f < 8; f++) {
         quantizationMatrix[i][f] = ((1 + (1 + i + f) * quality));
@@ -116,7 +110,7 @@ class Encoder {
         List<int> quantizedDCTRow = [];
         for (int k = 0; k < dctCoefficients[i][j].length; k++) {
           quantizedDCTRow.add(
-              (dctCoefficients[i][j][k] / quantizationMatrix[j][k]).round());
+              (dctCoefficients[i][j][k] / quantizationMatrix[j][k]).floor());
         }
         quantizedDCTCoefficientBlock.add(quantizedDCTRow);
       }
@@ -165,7 +159,6 @@ class Encoder {
       }
       result.add(zigzagOrder);
     }
-
     return result;
   }
 
@@ -176,10 +169,10 @@ class Encoder {
         zeroCounter++;
       } else {
         while (zeroCounter > 15) {
-          result.add((15 << 4));
+          result.add((15 << 4));// 11110000
           zeroCounter -= 16;
         }
-        result.add((zeroCounter << 4) | _getCategory(zigzagOrder[i]));
+        result.add((zeroCounter << 4) | zigzagOrder[i].bitLength);
         result.add(zigzagOrder[i]);
         zeroCounter = 0;
       }
@@ -201,20 +194,9 @@ class Encoder {
     return DPCMEncodedCoefficients;
   }
 
-  _getCategory(int value) {
-    int count = 0;
-    value = value.abs();
-    while (value > 0) {
-      count += value & 1;
-      value >>= 1;
-    }
-    return count;
-  }
-
   _getHuffmanTable(List<int> runLengthEncodedCoefficients,
       List<int> dpcmEncodedCoefficients) {
-    print("run length coding length is ${runLengthEncodedCoefficients.length}");
-    print("dpcm coding length is ${dpcmEncodedCoefficients.length}");
+
     Map<int, String> huffmanTable = {};
     Map<int, int> statics = {};
     for (int i = 0; i < runLengthEncodedCoefficients.length; i++) {
@@ -244,14 +226,12 @@ class Encoder {
   HuffmanTreeNode _createHuffmanTree(Map<int, int> statics) {
     List<int> keys = statics.keys.toList();
     keys.sort((a, b) => statics[a]!.compareTo(statics[b]!));
-    print("sorted keys $keys");
     List<HuffmanTreeNode> nodes = [];
     for (int i = 0; i < keys.length; i++) {
       nodes.add(
           HuffmanTreeNode(value: keys[i], childrenCount: statics[keys[i]]!));
     }
     while (nodes.length > 1) {
-      print("nodes length is ${nodes.length}");
       HuffmanTreeNode left = nodes.removeAt(0);
       HuffmanTreeNode right = nodes.removeAt(0);
       HuffmanTreeNode parent = HuffmanTreeNode(
@@ -267,7 +247,6 @@ class Encoder {
   _createHuffmanTableHelper(
       HuffmanTreeNode treeRoot, Map<int, String> huffmanTable, String code) {
     if (treeRoot.left == null && treeRoot.right == null) {
-      print("here");
       huffmanTable[treeRoot.value!] = code;
       return;
     }
@@ -294,16 +273,13 @@ class Encoder {
         int temp = int.parse(bitsRepresentation, radix: 2);
         result.add(temp);
       }
-
-
-    print("huffman encoding finished");
   }
 
   _writeAtFile(
       List<int> dpcmEncodedCoefficientsWithHuffman,
       List<int> acCoefficientsWithHuffman,
       Map<int, String> huffmanTable,
-      List<List<int>> quantizationMatrix) async {
+      List<List<int>> quantizationMatrix,List<int> metaData,String originalFilePath) async {
     List<String> huffmanTableValues = [];
     huffmanTable.values.toList().forEach((element) {
       huffmanTableValues.add('"$element"');
@@ -315,10 +291,25 @@ class Encoder {
           Uint8List.fromList(acCoefficientsWithHuffman),
       '"huffmanTableKeys"': huffmanTable.keys.toList(),
       '"huffmanTableValues"': huffmanTableValues,
-      '"quantizationMatrix"': quantizationMatrix
+      '"quantizationMatrix"': quantizationMatrix,
+      '"metaData"':metaData
     };
-    final filename = 'file.txt';
-    File file = File(filename);
-    await file.writeAsString(encodedData.toString());
+    String originalFileName = originalFilePath.split("\\").last.split(".").first;
+    print("original file name is $originalFileName");
+    String compressedFilePath="compressed_sound_files\\${originalFileName}_compressed.bin";
+    compressToFile(encodedData,compressedFilePath);
+
+  }
+  Future<void> compressToFile(
+      Map<String, dynamic> data,
+      String filename) async {
+    final encodedDataBytes = utf8.encode(data.toString());
+
+    // Compress the data using ZLib with the specified compression level
+    final compressedData = ZLibCodec(level: 9).encode(encodedDataBytes);
+
+    final file = File(filename);
+    await file.writeAsBytes(compressedData);
+    print('Compression completed. File saved: $filename');
   }
 }

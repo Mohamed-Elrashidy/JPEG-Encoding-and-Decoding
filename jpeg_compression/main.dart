@@ -2,21 +2,22 @@ import 'dart:io';
 
 import 'decoder/decoder.dart';
 import 'encoder/encoder.dart';
-import 'sound_file.dart';
 
 Future<void> main (List<String>args) async {
-  String filePath = "E:/Fourth year/First semster/multimedia/project/JPEG-Encoding-and-Decoding/original_sound_files/test_ringtone.wav";
-  SoundFile soundFile = SoundFile(filePath: filePath);
-  // get matrix of non-overlapping 8*8 blocks
- await Decoder(filePath:"file.txt").decode();
- //Encoder(filePath: filePath).encode();
+  print("Select the number of operation you want to do \n 1- Encode \n 2- Decode \n");
+  int operation = int.parse(stdin.readLineSync()!);
+  if(operation == 1){
+    print("Enter the path of the sound file you want to encode");
+    String filePath = stdin.readLineSync()!;
+    Encoder(filePath: filePath).encode();
+  }
+  else if(operation == 2){
+    print("Enter the path of the Compressed sound file you want to decode");
+    String filePath = stdin.readLineSync()!;
+    await Decoder(filePath:filePath).decode();
+  }
+  else{
+    print("Invalid operation");
+  }
+
 }
-/*
-*blocks is 7375040
-blocks is 115235
-ziajag order length is 7259805
-dpcm coding length is 115235
-ziagzag or der + dpcm 7375040
-run length coding length is 9227197
-dpcm coding length is 115235
-* */

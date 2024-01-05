@@ -1,5 +1,5 @@
 import 'dart:io';
-
+import 'package:wav/wav.dart';
 class SoundFile {
   String filePath;
   SoundFile({required this.filePath});
@@ -7,7 +7,14 @@ class SoundFile {
   Future<List<int>> _getSoundFileDataAsBytes() async {
     var file = File(filePath);
     var bytes = await file.readAsBytes();
-    return bytes;
+  /* final wav=  Wav.read(bytes);
+  final monoWav= Wav(
+     [wav.toMono()],
+      wav.samplesPerSecond,
+      wav.format);
+    await wav.writeFile(filePath);
+    bytes = await file.readAsBytes();*/
+    return List<int>.from(bytes.sublist(44));
   }
 
   Future<List<List<int>>> _convertSoundBytesToMatrix() async {
@@ -50,5 +57,10 @@ class SoundFile {
     return blocks;
   }
 
-
+  getMetaData()
+  async {
+    var file = File(filePath);
+    var bytes = await file.readAsBytes();
+    return List<int>.from(bytes.sublist(0,44));
+  }
 }

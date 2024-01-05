@@ -10,20 +10,14 @@ class Decoder {
     await _getAllDataOfCompressedSoundFile(filePath, data);
     List<int> acCoefficientsWithRunLengthEncoding =
         _decodeHuffman(data["acCoefficientsWithHuffman"], data["huffmanTable"]);
-    print("size after runlength ${acCoefficientsWithRunLengthEncoding.length}");
     List<int> dpcmEncodedCoefficientsEncoding = _decodeHuffman(
         data["dpcmEncodedCoefficientsWithHuffman"], data["huffmanTable"]);
 
-    print("dc size after huffman ${dpcmEncodedCoefficientsEncoding.length}");
-    print (dpcmEncodedCoefficientsEncoding.last);
     List<int> quantizedDCCoefficients =
         _decodeDPCM(dpcmEncodedCoefficientsEncoding);
     List<int> runLengthDecodedACCoefficients =
         _decodeRunLengthEncoding(acCoefficientsWithRunLengthEncoding);
-    print("AC size after runlength ${runLengthDecodedACCoefficients.length}");
-    print("DC size after runlength ${quantizedDCCoefficients.length}");
-    print("AC +DC size after runlength ${runLengthDecodedACCoefficients.length+quantizedDCCoefficients.length}");
-     print("first ten numbers ${runLengthDecodedACCoefficients.sublist(0,100)}");
+
     List<List<List<int>>> blocks = [];
     _generateBlocks(
         quantizedDCCoefficients, runLengthDecodedACCoefficients, blocks);
@@ -32,19 +26,33 @@ class Decoder {
     _removeShift(blocks);
     List<int> decodedSound = [];
     _returnBlocksToList(blocks, decodedSound);
-    _writeDecodedSoundToFile(decodedSound);
+    _writeDecodedSoundToFile(decodedSound, data["metaData"], filePath);
+  }
 
-    //   print("first 10 numbers ${acCoefficientsWithRunLengthEncoding.sublist(0,10)}");
+  Future<Map<String, dynamic>> decompressFromFile(String filename) async {
+    final file = File(filename);
+
+    // Read compressed data from the file
+    final compressedData = await file.readAsBytes();
+
+    // Decompress the data using ZLib
+    final decompressedData = ZLibCodec().decode(compressedData);
+
+    // Decode the decompressed data (assuming it's in JSON format)
+    final decodedData = jsonDecode(utf8.decode(decompressedData));
+
+    return decodedData;
   }
 
   _getAllDataOfCompressedSoundFile(
       String filePath, Map<String, dynamic> data) async {
     // get data from file
     File file = File(filePath);
-    String fileContent = await file.readAsString();
-    Map<String, dynamic> fileContentAsMap = jsonDecode(fileContent);
+
+    Map<String, dynamic> fileContentAsMap = await decompressFromFile(filePath);
     data["dpcmEncodedCoefficientsWithHuffman"] =
         List<int>.from(fileContentAsMap["dpcmEncodedCoefficientsWithHuffman"]);
+    data["metaData"] = List<int>.from(fileContentAsMap["metaData"]);
     data["acCoefficientsWithHuffman"] =
         List<int>.from(fileContentAsMap["acCoefficientsWithHuffman"]);
     List<dynamic> temp =
@@ -53,7 +61,6 @@ class Decoder {
         List<int>.from(fileContentAsMap["huffmanTableKeys"]);
     data["huffmanTableValues"] =
         List<String>.from(fileContentAsMap["huffmanTableValues"]);
-    print (data["huffmanTableValues"]);
     // format data to be used in decoder
     List<List<int>> quantizationMatrix = [];
     temp.forEach((element) {
@@ -71,39 +78,27 @@ class Decoder {
 
   List<int> _decodeHuffman(
       List<int> encodedData, Map<dynamic, dynamic> huffmanTable) {
-    print(huffmanTable);
     List<int> decodedData = [];
     String bitsRepresentation = "";
     int index = 0;
     while (index < encodedData.length) {
-      for(int i=0;i<bitsRepresentation.length;i++)
-        {//print(i);
-          if(huffmanTable.containsKey(bitsRepresentation.substring(0,i)))
-            {
-              decodedData.add(huffmanTable[bitsRepresentation.substring(0,i)]);
-             // print(bitsRepresentation.length);
-              bitsRepresentation = bitsRepresentation.substring(i);
-            //  print(bitsRepresentation.length);
-              i=0;
-            }
+      for (int i = 0; i < bitsRepresentation.length; i++) {
+        if (huffmanTable.containsKey(bitsRepresentation.substring(0, i))) {
+          decodedData.add(huffmanTable[bitsRepresentation.substring(0, i)]);
+          bitsRepresentation = bitsRepresentation.substring(i);
+          i = 0;
         }
-        bitsRepresentation+= encodedData[index++].toRadixString(2).padLeft(8, '0');
-
       }
-    for(int i=0;i<bitsRepresentation.length;i++)
-    {//print(i);
-      if(huffmanTable.containsKey(bitsRepresentation.substring(0,i)))
-      {
-        decodedData.add(huffmanTable[bitsRepresentation.substring(0,i)]);
-        // print(bitsRepresentation.length);
+      bitsRepresentation +=
+          encodedData[index++].toRadixString(2).padLeft(8, '0');
+    }
+    for (int i = 0; i < bitsRepresentation.length; i++) {
+      if (huffmanTable.containsKey(bitsRepresentation.substring(0, i))) {
+        decodedData.add(huffmanTable[bitsRepresentation.substring(0, i)]);
         bitsRepresentation = bitsRepresentation.substring(i);
-        //  print(bitsRepresentation.length);
-        i=0;
+        i = 0;
       }
     }
-
-    print("huffman decoding finished");
-  //  print(decodedData.sublist(0, 10));
     return decodedData;
   }
 
@@ -127,7 +122,7 @@ class Decoder {
           indexInsideBlock++;
         }
         indexInsideBlock = 0;
-      } else if (acCoefficientsWithRunLengthEncoding[i] == (15<<4)) {
+      } else if (acCoefficientsWithRunLengthEncoding[i] == (15 << 4)) {
         int cnt = 16;
         while (cnt > 0) {
           decodedData.add(0);
@@ -135,7 +130,6 @@ class Decoder {
           indexInsideBlock++;
         }
       } else {
-
         int runLength = acCoefficientsWithRunLengthEncoding[i] >> 4;
         while (runLength > 0) {
           decodedData.add(0);
@@ -143,14 +137,10 @@ class Decoder {
           indexInsideBlock++;
         }
         i++;
-        try{
-        decodedData.add(acCoefficientsWithRunLengthEncoding[i]);
-        indexInsideBlock++;
-        }
-        catch(e){
-          print(i-1);
-          print(acCoefficientsWithRunLengthEncoding[i-1]);
-        }
+        try {
+          decodedData.add(acCoefficientsWithRunLengthEncoding[i]);
+          indexInsideBlock++;
+        } catch (e) {}
       }
     }
     return decodedData;
@@ -158,7 +148,6 @@ class Decoder {
 
   void _generateBlocks(List<int> quantizedDCCoefficients,
       List<int> runLengthDecodedACCoefficients, List<List<List<int>>> blocks) {
-    print("quantizedDCCoefficients length is ${quantizedDCCoefficients.length}");
     int acCoefficientIndex = 0;
     for (int i = 0;
         i < quantizedDCCoefficients.length;
@@ -193,7 +182,7 @@ class Decoder {
       }
     }
 
-  /*  int numRows = block.length;
+    /*  int numRows = block.length;
     int numCols = block[0].length;
     int index = 0;
 
@@ -233,7 +222,6 @@ class Decoder {
   void _DCTCoefficientsReverse(List<List<List<int>>> blocks) {
     List<List<List<int>>> tempBlocks = blocks;
     for (int blockIndex = 0; blockIndex < tempBlocks.length; blockIndex++) {
-    //  print("block index is ${blocks[0]}");
       for (int targetRowIndex = 0; targetRowIndex < 8; targetRowIndex++) {
         for (int targetColIndex = 0; targetColIndex < 8; targetColIndex++) {
           double sum = 0;
@@ -265,7 +253,8 @@ class Decoder {
     }
   }
 
-  void _returnBlocksToList(List<List<List<int>>> blocks, List<int> decodedSound) {
+  void _returnBlocksToList(
+      List<List<List<int>>> blocks, List<int> decodedSound) {
     for (int blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
       for (int rowIndex = 0; rowIndex < 8; rowIndex++) {
         for (int colIndex = 0; colIndex < 8; colIndex++) {
@@ -275,12 +264,15 @@ class Decoder {
     }
   }
 
-  void _writeDecodedSoundToFile(List<int> decodedSound) {
-    print("decoded sound length is ${decodedSound.length}");
-    File file = File("decoded_sound.wav");
-    file.writeAsBytes(decodedSound);
+  void _writeDecodedSoundToFile(
+      List<int> decodedSound, List<int> metaData, String  compressedSoundFilePath) {
+    String fileName = compressedSoundFilePath.split("\\").last.split('.').first;
+    if(fileName.contains("_compressed"))
+      fileName = fileName.substring(0,fileName.length-11);
+    File file = File("reconstructed_sound_file\\reconstructed_$fileName.wav");
+    List<int> decodedSoundWithMetaData = [];
+    decodedSoundWithMetaData.addAll(metaData);
+    decodedSoundWithMetaData.addAll(decodedSound);
+    file.writeAsBytes(decodedSoundWithMetaData);
   }
 }
-/*
-huffman table is {-1: 0, 2: 4, -2: 5, 81: 6, 225: 1792, 241: 7172, 240: 7173, 209: 3587, 193: 897, 177: 449, 161: 225, 145: 113, 129: 57, 113: 29, 97: 15, 65: 2, 49: 3, 0: 2, 33: 3, 17: 1, 1: 1}
-*/
